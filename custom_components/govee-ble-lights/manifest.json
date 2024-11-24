@@ -1,15 +1,15 @@
 {
-    "domain": "govee-ble-lights",
-    "name": "GOVEE Bluetooth Lights",
+    "domain": "hass-govee-h6199",
+    "name": "GOVEE Dreamview T1",
     "bluetooth": [
         { "local_name": "ihoment_*", "connectable": false }
     ],
     "requirements": ["bleak-retry-connector"],
     "dependencies": ["bluetooth"],
-    "codeowners": ["@timniklas"],
+    "codeowners": ["@necrokote"],
     "config_flow": true,
-    "documentation": "https://github.com/timniklas/hass-govee-bluetooth-lights",
+    "documentation": "https://github.com/necrokote/hass-govee-h6199",
     "iot_class": "local_polling",
-    "issue_tracker": "https://github.com/timniklas/hass-govee-bluetooth-lights/issues",
+    "issue_tracker": "https://github.com/necrokote/hass-govee-h6199/issues",
     "version": "0.0.0"
 }
