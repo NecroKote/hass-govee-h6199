@@ -62,7 +62,7 @@ class Hub:
         if client is None:
             client = await self.connect()
 
-        await client.write_gatt_char(UUID_CONTROL_CHARACTERISTIC, frame, False)
+        await client.write_gatt_char(UUID_CONTROL_CHARACTERISTIC, frame)
 
     async def sendMultiple(self, commands: list[tuple[int, bytes | list[int]]]):
         client = await self.connect()
@@ -82,7 +82,7 @@ async def async_setup_entry(
 
 class GoveeH1699(LightEntity):
     _attr_color_mode = ColorMode.RGB
-    _attr_supported_color_modes = {ColorMode.RGB}
+    _attr_supported_color_modes = {ColorMode.ONOFF, ColorMode.RGB}
     _attr_supported_features = LightEntityFeature.EFFECT
     _attr_effect = EFFECT_OFF
     _attr_effect_list = [EFFECT_OFF, "music", "video_movie", "video_game"]
@@ -126,7 +126,11 @@ class GoveeH1699(LightEntity):
 
         self._attr_is_on = True
 
-        if effect := kwargs.get(ATTR_EFFECT):
+        if brightness := kwargs.get(ATTR_BRIGHTNESS, 255):
+            commands.append((PacketTypeId.BRIGHTNESS, [brightness]))
+            self._attr_brightness = brightness
+
+        if (effect := kwargs.get(ATTR_EFFECT)) != EFFECT_OFF:
             self._attr_color_mode = ColorMode.ONOFF
             self._attr_effect = effect
 
@@ -145,22 +149,18 @@ class GoveeH1699(LightEntity):
             self._attr_color_mode = ColorMode.RGB
             self._attr_effect = EFFECT_OFF
 
-        if brightness := kwargs.get(ATTR_BRIGHTNESS, 255):
-            commands.append((PacketTypeId.BRIGHTNESS, [brightness]))
-            self._attr_brightness = brightness
+            if rgb := kwargs.get(ATTR_RGB_COLOR):
+                red, green, blue = rgb
+                self._attr_rgb_color = (red, green, blue)
 
-        elif rgb := kwargs.get(ATTR_RGB_COLOR):
-            red, green, blue = rgb
-            self._attr_rgb_color = (red, green, blue)
-
-            commands.append(
-                (
-                    PacketTypeId.COLOR,
-                    [ColorModeId.SEGMENT, red, green, blue, 0x00, 0x00, 0xFF, 0x7F],
+                commands.append(
+                    (
+                        PacketTypeId.COLOR,
+                        [ColorModeId.SEGMENT, red, green, blue, 0x00, 0x00, 0xFF, 0x7F],
+                    )
                 )
-            )
 
-        hub.sendMultiple(commands)
+        await hub.sendMultiple(commands)
 
     async def async_turn_off(self, **kwargs) -> None:
         if (hub := self._hub) is None:
