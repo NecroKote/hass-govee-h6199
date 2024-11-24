@@ -1,7 +1,7 @@
 {
     "domain": "hass-govee-h6199",
-    "name": "GOVEE Dreamview T1",
-    "bluetooth": [{ "local_name": "ihoment_*", "connectable": false }],
+    "name": "GOVEE DreamView T1",
+    "bluetooth": [{ "local_name": "Govee_H6199_*", "connectable": false }],
     "codeowners": ["@necrokote"],
     "config_flow": true,
     "dependencies": ["bluetooth"],
