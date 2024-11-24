@@ -9,23 +9,9 @@ from .const import DOMAIN
 
 PLATFORMS: list[str] = ["light"]
 
-class Hub:
-    def __init__(self, hass: HomeAssistant, address: str) -> None:
-        """Init dummy hub."""
-        self.address = address
-
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Govee BLE device from a config entry."""
-    address = entry.unique_id
-    assert address is not None
-    ble_device = bluetooth.async_ble_device_from_address(hass, address.upper(), True)
-    if not ble_device:
-        raise ConfigEntryNotReady(
-            f"Could not find LED BLE device with address {address}"
-        )
-
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = Hub(hass, address=address)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
