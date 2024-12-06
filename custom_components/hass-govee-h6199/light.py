@@ -1,7 +1,8 @@
-from bleak import BleakClient
-import bleak_retry_connector
+import logging
+import math
+from functools import cached_property
 
-from homeassistant.components import bluetooth
+from govee_h6199_ble import MusicColorMode, VideoColorMode
 from homeassistant.components.light import (
     ATTR_BRIGHTNESS,
     ATTR_EFFECT,
@@ -11,160 +12,104 @@ from homeassistant.components.light import (
     LightEntity,
     LightEntityFeature,
 )
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util.color import brightness_to_value, value_to_brightness
 
-from .const import (
-    DOMAIN,
-    UUID_CONTROL_CHARACTERISTIC,
-    ColorModeId,
-    PacketTypeId,
-    PowerValue,
-)
-
-
-class Hub:
-    def __init__(self, hass: HomeAssistant, address: str) -> None:
-        """Init dummy hub."""
-        self.address = address
-        self.unique_id = address.replace(":", "")
-        self.device = bluetooth.async_ble_device_from_address(
-            hass, address.upper(), False
-        )
-
-    async def connect(self) -> BleakClient:
-        return await bleak_retry_connector.establish_connection(
-            BleakClient, self.device, self.unique_id
-        )
-
-    async def sendCommand(
-        self, cmd: int, payload: bytes | list[int], client: BleakClient | None = None
-    ):
-        if len(payload) > 17:
-            raise ValueError("Payload too long")
-
-        cmd = cmd & 0xFF
-        payload = bytes(payload)
-
-        frame = bytes([0x33, cmd]) + bytes(payload)
-        # pad frame data to 19 bytes (plus checksum)
-        frame += bytes([0] * (19 - len(frame)))
-
-        # The checksum is calculated by XORing all data bytes
-        checksum = 0
-        for b in frame:
-            checksum ^= b
-
-        frame += bytes([checksum & 0xFF])
-
-        if client is None:
-            client = await self.connect()
-
-        await client.write_gatt_char(UUID_CONTROL_CHARACTERISTIC, frame)
-
-    async def sendMultiple(self, commands: list[tuple[int, bytes | list[int]]]):
-        client = await self.connect()
-        for cmd, payload in commands:
-            await self.sendCommand(cmd, payload, client)
+from .const import BRIGHTNESS_SCALE, Effect
+from .coordinator import CustomConfigEntry, GoveeH6199DataCoordinator
+from .device import PowerOnCommandBuilder
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
+    hass: HomeAssistant,
+    entry: CustomConfigEntry,
+    async_add_entities: AddEntitiesCallback,
 ):
-    address = entry.unique_id
-    assert address is not None
-
-    hub = hass.data.setdefault(DOMAIN, {})[entry.entry_id] = Hub(hass, address=address)
-    async_add_entities([GoveeH1699(hub, entry)])
+    async_add_entities([GoveeH1699(entry)])
 
 
-class GoveeH1699(LightEntity):
+class GoveeH1699(CoordinatorEntity[GoveeH6199DataCoordinator], LightEntity):
     _attr_color_mode = ColorMode.RGB
-    _attr_supported_color_modes = {ColorMode.ONOFF, ColorMode.RGB}
+    _attr_supported_color_modes = {ColorMode.RGB}
     _attr_supported_features = LightEntityFeature.EFFECT
-    _attr_effect = EFFECT_OFF
-    _attr_effect_list = [EFFECT_OFF, "music", "video_movie", "video_game"]
+    _attr_effect_list = [EFFECT_OFF, Effect.MUSIC, Effect.FILM, Effect.GAME]
 
-    def __init__(self, hub: Hub, entry: ConfigEntry) -> None:
+    def __init__(
+        self,
+        entry: CustomConfigEntry,
+    ) -> None:
         """Initialize an bluetooth light."""
-        self._mac = hub.address
-        self._attr_is_on = None
-        self._config = entry
+        super().__init__(entry.runtime_data)
 
-        # TODO: read actual state ?
-        mac = self._mac.replace(":", "")
-        self._attr_unique_id = f"govee_h6199_{mac}"
+        self._log = logging.getLogger(__name__)
+
+        btmac = self._data.address
+        device_id = btmac.replace(":", "").lower()
+
+        self._attr_unique_id = f"{device_id}_light"
         self._attr_device_info = dr.DeviceInfo(
-            connections={
-                (
-                    dr.CONNECTION_BLUETOOTH,
-                    self._mac,
-                )
-            },
+            connections={(dr.CONNECTION_BLUETOOTH, btmac)},
             manufacturer="Govee",
-            model="H1699",
-            name="Govee DreamView T1",
-            sw_version="1.0",
+            model_id="H1699",
+            model="Govee DreamView T1",
+            sw_version=self._data.fw_version,
+            hw_version=self._data.hw_version,
         )
 
     @property
+    def _data(self):
+        return self.coordinator.data
+
+    @cached_property
     def name(self) -> str:
-        """Return the name of the switch."""
-        return "DreamView T1"
+        """Return the name of the light."""
+        return "Light"
 
     @property
-    def _hub(self) -> Hub | None:
-        return self.hass.data.get(DOMAIN, {}).get(self._config.entry_id)
+    def brightness(self) -> int | None:
+        return value_to_brightness(BRIGHTNESS_SCALE, self._data.brightness)
+
+    @property
+    def is_on(self) -> bool | None:
+        return self._data.power_state
+
+    @property
+    def rgb_color(self) -> tuple[int, int, int] | None:
+        return self._data.color
+
+    @property
+    def effect(self) -> str | None:
+        match self._data.mode:
+            case MusicColorMode():
+                return Effect.MUSIC
+            case VideoColorMode(game_mode=game_mode):
+                if game_mode:
+                    return Effect.GAME
+                return Effect.FILM
+
+        return EFFECT_OFF
 
     async def async_turn_on(self, **kwargs) -> None:
-        if (hub := self._hub) is None:
-            return
+        on_command = PowerOnCommandBuilder(self._data)
 
-        commands = [(PacketTypeId.POWER, [0x1])]
+        if raw_brightness := kwargs.get(ATTR_BRIGHTNESS):
+            brightness = math.ceil(
+                brightness_to_value(BRIGHTNESS_SCALE, raw_brightness)
+            )
+            on_command.with_brightness(brightness)
 
-        self._attr_is_on = True
+        if effect := kwargs.get(ATTR_EFFECT):
+            on_command.with_effect(effect)
 
-        if brightness := kwargs.get(ATTR_BRIGHTNESS, 255):
-            commands.append((PacketTypeId.BRIGHTNESS, [brightness]))
-            self._attr_brightness = brightness
+        if rgb := kwargs.get(ATTR_RGB_COLOR):
+            on_command.with_color(rgb)
 
-        if (effect := kwargs.get(ATTR_EFFECT)) != EFFECT_OFF:
-            self._attr_color_mode = ColorMode.ONOFF
-            self._attr_effect = effect
-
-            match effect:
-                case "music":
-                    commands.append((PacketTypeId.COLOR, [ColorModeId.MUSIC, 0x03]))
-                case "video_movie":
-                    commands.append(
-                        (PacketTypeId.COLOR, [ColorModeId.VIDEO, 0x01, 0x00, 0x64])
-                    )
-                case "video_game":
-                    commands.append(
-                        (PacketTypeId.COLOR, [ColorModeId.VIDEO, 0x01, 0x01, 0x64])
-                    )
-        else:
-            self._attr_color_mode = ColorMode.RGB
-            self._attr_effect = EFFECT_OFF
-
-            if rgb := kwargs.get(ATTR_RGB_COLOR):
-                red, green, blue = rgb
-                self._attr_rgb_color = (red, green, blue)
-
-                commands.append(
-                    (
-                        PacketTypeId.COLOR,
-                        [ColorModeId.SEGMENT, red, green, blue, 0x00, 0x00, 0xFF, 0x7F],
-                    )
-                )
-
-        await hub.sendMultiple(commands)
+        await self.coordinator.device.power_on(on_command)
+        await self.async_update()
 
     async def async_turn_off(self, **kwargs) -> None:
-        if (hub := self._hub) is None:
-            return
-
-        await hub.sendCommand(PacketTypeId.POWER, [PowerValue.OFF])
-        self._attr_is_on = False
+        await self.coordinator.device.power_off()
+        await self.async_update()
