@@ -4,7 +4,6 @@ from dataclasses import replace
 from functools import partial
 from typing import Awaitable, Callable, TypeVar
 
-from async_interrupt import interrupt
 from bleak import BleakClient
 from bleak.backends.device import BLEDevice
 from bleak_retry_connector import BleakClientWithServiceCache, establish_connection
@@ -91,7 +90,7 @@ class GoveeH6199Device:
     async def _connect(self, on_disconnect: asyncio.Future | None = None):
         self.logger.debug("Connecting to %s ...", self._ble_device.address)
         client = await establish_connection(
-            BleakClientWithServiceCache,
+            BleakClient,
             self._ble_device,
             self._ble_device.address,
             disconnected_callback=on_disconnect
@@ -140,17 +139,9 @@ class GoveeH6199Device:
             await self.init()
             return
 
-        on_disconnect = asyncio.get_running_loop().create_future()
         async with self._lock:
-            client = await self._connect(on_disconnect)
-            async with (
-                interrupt(
-                    on_disconnect,
-                    Exception,
-                    f"Disconnected from {client.address}",
-                ),
-                asyncio.timeout(UPDATE_TIMEOUT),
-            ):
+            client = await self._connect()
+            async with asyncio.timeout(UPDATE_TIMEOUT):
                 async with connected(client) as device:
                     power, mode, br = await self._get_device_info(device)
 
@@ -164,10 +155,9 @@ class GoveeH6199Device:
 
     async def _send_commands(self, commands: list[Command]):
         """Send commands to the device."""
-        on_disconnect = asyncio.get_running_loop().create_future()
 
         async with self._lock:
-            client = await self._connect(on_disconnect)
+            client = await self._connect()
             async with connected(client) as device:
                 self.logger.debug("Sending commands: %s", commands)
                 await device.send_commands(commands)
