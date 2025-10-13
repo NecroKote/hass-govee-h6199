@@ -1,10 +1,10 @@
 {
     "domain": "hass-govee-h6199",
     "name": "Govee DreamView T1",
-    "bluetooth": [{ "local_name": "Govee_H6199_*", "connectable": false }],
+    "bluetooth": [{ "local_name": "Govee_H6199_*", "connectable": true }],
     "codeowners": ["@necrokote"],
     "config_flow": true,
-    "dependencies": ["bluetooth"],
+    "dependencies": ["bluetooth", "bluetooth_adapters"],
     "documentation": "https://github.com/necrokote/hass-govee-h6199",
     "iot_class": "local_polling",
     "issue_tracker": "https://github.com/necrokote/hass-govee-h6199/issues",
