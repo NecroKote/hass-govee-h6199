@@ -12,20 +12,23 @@ The Govee Dreamview T1 Home Assistant Custom Integration allows you to integrate
 
 ## Installation
 
+This integration requires [Bluetooth](https://www.home-assistant.io/integrations/bluetooth/) integration to be installed and enabled. You must have at least one Bluetooth adapter configured that is capable of establishing an active connection.
+
 ### HACS (recommended)
 
-This integration is available in HACS (Home Assistant Community Store).
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=NecroKote&repository=hass-govee-h6199)
 
-1. Install HACS if you don't have it already
+### HACS
+
+1. [Install HACS](https://www.hacs.xyz/docs/use/download/download/) if you don't have it already
 2. Open HACS in Home Assistant
-3. Go to any of the sections (integrations, frontend, automation).
-4. Click on the 3 dots in the top right corner.
-5. Select "Custom repositories"
-6. Add following URL to the repository `https://github.com/necrokote/hass-govee-h6199`.
-7. Select Integration as category.
-8. Click the "ADD" button
-9. Search for "Govee Bluetooth Lights"
-10. Click the "Download" button
+3. Click on the 3 dots in the top right corner.
+4. Select "Custom repositories"
+5. Add following URL to the repository `https://github.com/necrokote/hass-govee-h6199`.
+6. Select Integration as category.
+7. Click the "ADD" button
+8. Search for "Govee Bluetooth Lights"
+9. Click the "Download" button
 
 ### Manual
 

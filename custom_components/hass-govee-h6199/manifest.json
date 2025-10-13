@@ -9,6 +9,6 @@
     "iot_class": "local_polling",
     "issue_tracker": "https://github.com/necrokote/hass-govee-h6199/issues",
     "loggers": ["custom_components.hass-govee-h6199"],
-    "requirements": ["bleak-retry-connector", "govee-h6199-ble"],
+    "requirements": ["bleak-retry-connector", "govee-h6199-ble==0.4.0"],
     "version": "0.3.0"
 }

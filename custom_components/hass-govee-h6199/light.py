@@ -1,6 +1,7 @@
 import logging
 import math
 from functools import cached_property
+from typing import ClassVar
 
 from govee_h6199_ble import MusicColorMode, VideoColorMode
 from homeassistant.components.light import (
@@ -33,9 +34,14 @@ async def async_setup_entry(
 
 class GoveeH1699(CoordinatorEntity[GoveeH6199DataCoordinator], LightEntity):
     _attr_color_mode = ColorMode.RGB
-    _attr_supported_color_modes = {ColorMode.RGB}
+    _attr_supported_color_modes: ClassVar[set[ColorMode]] = {ColorMode.RGB}
     _attr_supported_features = LightEntityFeature.EFFECT
-    _attr_effect_list = [EFFECT_OFF, Effect.MUSIC, Effect.FILM, Effect.GAME]
+    _attr_effect_list: ClassVar[list[Effect | str]] = [
+        EFFECT_OFF,
+        Effect.MUSIC,
+        Effect.FILM,
+        Effect.GAME,
+    ]
 
     def __init__(
         self,
@@ -47,14 +53,14 @@ class GoveeH1699(CoordinatorEntity[GoveeH6199DataCoordinator], LightEntity):
         self._log = logging.getLogger(__name__)
 
         btmac = self._data.address
-        device_id = btmac.replace(":", "").lower()
+        device_id = btmac.replace(':', '').lower()
 
-        self._attr_unique_id = f"{device_id}_light"
+        self._attr_unique_id = f'{device_id}_light'
         self._attr_device_info = dr.DeviceInfo(
             connections={(dr.CONNECTION_BLUETOOTH, btmac)},
-            manufacturer="Govee",
-            model_id="H1699",
-            model="Govee DreamView T1",
+            manufacturer='Govee',
+            model_id='H1699',
+            model='Govee DreamView T1',
             sw_version=self._data.fw_version,
             hw_version=self._data.hw_version,
         )
@@ -66,7 +72,7 @@ class GoveeH1699(CoordinatorEntity[GoveeH6199DataCoordinator], LightEntity):
     @cached_property
     def name(self) -> str:
         """Return the name of the light."""
-        return "Light"
+        return 'Light'
 
     @property
     def brightness(self) -> int | None:
@@ -96,9 +102,7 @@ class GoveeH1699(CoordinatorEntity[GoveeH6199DataCoordinator], LightEntity):
         on_command = PowerOnCommandBuilder(self._data)
 
         if raw_brightness := kwargs.get(ATTR_BRIGHTNESS):
-            brightness = math.ceil(
-                brightness_to_value(BRIGHTNESS_SCALE, raw_brightness)
-            )
+            brightness = math.ceil(brightness_to_value(BRIGHTNESS_SCALE, raw_brightness))
             on_command.with_brightness(brightness)
 
         if effect := kwargs.get(ATTR_EFFECT):
