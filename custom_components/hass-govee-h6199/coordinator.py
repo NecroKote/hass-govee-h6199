@@ -28,22 +28,22 @@ class GoveeH6199DataCoordinator(DataUpdateCoordinator[GoveeH6199Data]):
 
         super().__init__(
             hass,
-            logging.getLogger(__name__),
+            logging.getLogger(__name__ + "@" + str(id(self))),
             config_entry=entry,
             name=DOMAIN,
             update_interval=timedelta(seconds=DEFAULT_SCAN_INTERVAL),
         )
 
     async def _async_setup(self) -> None:
-        self.logger.debug(f"[{self!r}] Setting up coordinator...")
+        self.logger.debug("Setting up coordinator...")
         self.hass.create_task(self.device.init(), "connect to govee device")
 
     async def _async_update_data(self) -> GoveeH6199Data:
-        self.logger.debug(f"[{self!r}] Updating data...")
+        self.logger.debug("Updating data...")
         try:
             await self.device.update()
 
         except Exception as err:
-            raise UpdateFailed(f"[{self!r}] Unable to fetch data: {err!r}") from err
+            raise UpdateFailed(f"Unable to fetch data: {err!r}") from err
 
         return self.device.data

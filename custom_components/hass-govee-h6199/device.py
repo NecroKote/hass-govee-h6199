@@ -74,14 +74,16 @@ class PowerOnCommandBuilder:
 
 class GoveeH6199Device:
     data: GoveeH6199Data
-
     ping_interval = 2
+
+    on_data_listeners: list[Callable[[GoveeH6199Data], None]]
 
     def __init__(self, address: str, device: BLEDevice) -> None:
         self.data = None  # type: ignore
+        self.on_data_listeners = []
         self._ble_device = device
         self.address = address
-        self.logger = logging.getLogger(__name__)
+        self.logger = logging.getLogger(__name__ + "@" + str(id(self)))
         self._lock = asyncio.Lock()
 
         self._client: BleakClient | None = None
@@ -89,6 +91,18 @@ class GoveeH6199Device:
         self._connected_event = asyncio.Event()
         self._init_event = asyncio.Event()
         self._ping_task: asyncio.Task | None = None
+
+    def add_data_listener(self, listener: Callable[[GoveeH6199Data], None]) -> None:
+        self.on_data_listeners.append(listener)
+
+    def notify_listeners(self) -> None:
+        for listener in self.on_data_listeners:
+            listener(self.data)
+
+    def set_data_and_notify_if_changed(self, new_data: GoveeH6199Data) -> None:
+        if new_data != self.data:
+            self.data = new_data
+            self.notify_listeners()
 
     async def _connect(self):
         self.logger.debug("Starting connection task...")
@@ -106,7 +120,7 @@ class GoveeH6199Device:
                 self.logger.debug("Connected to %s", self._ble_device.address)
                 self._client = client
                 if device := GoveeH6199(client):
-                    self.logger.debug("Starting Govee device")
+                    self.logger.debug("Starting Govee device...")
                     await device.start()
                     self._govee_device = device
 
@@ -122,7 +136,7 @@ class GoveeH6199Device:
 
                 return
             except Exception as e:
-                self.logger.warning(f"Connection failed: {e}, retrying in 2s...")
+                self.logger.warning("Connection failed: %s, retrying in 2s...", e)
                 await asyncio.sleep(2)
 
     def _handle_disconnect(self, client: BleakClient):
@@ -159,12 +173,13 @@ class GoveeH6199Device:
         while True:
             try:
                 self.logger.debug("Pinging device...")
-                power = await self._send_commands([GetPowerState()])
+                power = await self._send_command(GetPowerState())
                 if self.data:
-                    self.data = replace(self.data, power_state=power)
+                    new_data = replace(self.data, power_state=power)
+                    self.set_data_and_notify_if_changed(new_data)
 
             except Exception as e:
-                self.logger.warning(f"Ping failed: {e}")
+                self.logger.warning("Ping failed: %s", e)
 
             await asyncio.sleep(self.ping_interval)
 
@@ -176,9 +191,7 @@ class GoveeH6199Device:
             await self._connected_event.wait()
             try:
 
-                self.logger.debug(
-                    f"Initializing device: {self._govee_device!r}",
-                )
+                self.logger.debug("Initializing device ...")
 
                 async with self._lock:
                     device = cast(GoveeH6199, self._govee_device)
@@ -226,28 +239,28 @@ class GoveeH6199Device:
         )
         self.logger.debug("Updated data: %s", self.data)
 
-    async def _send_commands(self, commands: list[Command]):
-        """Send commands to the device using persistent connection."""
+    async def _send_command(self, command: Command):
+        """Send a single command to the device using persistent connection."""
         await self._connected_event.wait()
         await self._init_event.wait()
 
         if device := self._govee_device:
             async with self._lock:
-                self.logger.debug("Sending commands: %s", commands)
-                await device.send_commands(commands)
+                self.logger.debug("Sending command: %s", command)
+                return await device.send_command(command)
+
+    async def _send_commands(self, commands: list[Command]):
+        """Send commands to the device using persistent connection."""
+        self.logger.debug("Sending commands: %s", commands)
+        for command in commands:
+            await self._send_command(command)
 
     async def power_on(self, builder: PowerOnCommandBuilder):
         if new_state := builder.predict_state():
-            old_state = self.data
-            self.data = new_state
-
             self.logger.debug("Powering on ...")
-            try:
-                await self._send_commands(builder.build())
-            except:
-                self.data = old_state
-                raise
+            await self._send_commands(builder.build())
+            self.set_data_and_notify_if_changed(new_state)
 
     async def power_off(self):
-        self.data = replace(self.data, power_state=False)
-        await self._send_commands([PowerOff()])
+        power = await self._send_command(PowerOff())
+        self.set_data_and_notify_if_changed(replace(self.data, power_state=power))
