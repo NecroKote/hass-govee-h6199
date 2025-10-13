@@ -24,7 +24,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: CustomConfigEntry) -> bo
         )
 
     device = GoveeH6199Device(address, ble_device)
-
     coordinator = GoveeH6199DataCoordinator(hass, entry, device)
     entry.runtime_data = coordinator
     await coordinator.async_config_entry_first_refresh()

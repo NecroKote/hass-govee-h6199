@@ -15,6 +15,7 @@ type CustomConfigEntry = ConfigEntry[GoveeH6199DataCoordinator]
 class GoveeH6199DataCoordinator(DataUpdateCoordinator[GoveeH6199Data]):
     """Class to manage fetching Govee H6199 BLE data."""
 
+    device: GoveeH6199Device
     config_entry: CustomConfigEntry
 
     def __init__(
@@ -23,8 +24,6 @@ class GoveeH6199DataCoordinator(DataUpdateCoordinator[GoveeH6199Data]):
         entry: CustomConfigEntry,
         device: GoveeH6199Device,
     ) -> None:
-        """Initialize the coordinator."""
-
         self.device = device
 
         super().__init__(
@@ -36,17 +35,15 @@ class GoveeH6199DataCoordinator(DataUpdateCoordinator[GoveeH6199Data]):
         )
 
     async def _async_setup(self) -> None:
-        """Set up the coordinator."""
-
-        await self.device.init()
+        self.logger.debug(f"[{self!r}] Setting up coordinator...")
+        self.hass.create_task(self.device.init(), "connect to govee device")
 
     async def _async_update_data(self) -> GoveeH6199Data:
-        """Get data from Airthings BLE."""
-
+        self.logger.debug(f"[{self!r}] Updating data...")
         try:
             await self.device.update()
 
         except Exception as err:
-            raise UpdateFailed(f"Unable to fetch data: {err!r}") from err
+            raise UpdateFailed(f"[{self!r}] Unable to fetch data: {err!r}") from err
 
         return self.device.data
