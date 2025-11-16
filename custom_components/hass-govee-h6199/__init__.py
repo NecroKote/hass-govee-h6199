@@ -19,9 +19,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: CustomConfigEntry) -> bo
 
     ble_device = bluetooth.async_ble_device_from_address(hass, address)
     if not ble_device:
-        raise ConfigEntryNotReady(
-            f"Could not find Govee H6199 device with address {address}"
-        )
+        raise ConfigEntryNotReady(f'Could not find Govee H6199 device with address {address}')
 
     device = GoveeH6199Device(address, ble_device)
     coordinator = GoveeH6199DataCoordinator(hass, entry, device)

@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import voluptuous as vol
 from bleak import BleakClient
-from bleak.backends.device import BLEDevice
+from bleak_retry_connector import establish_connection
 from govee_h6199_ble import GetFirmwareVersion, GetMacAddress, connected
 from homeassistant.components.bluetooth import (
     BluetoothServiceInfoBleak,
@@ -16,6 +16,9 @@ from homeassistant.config_entries import ConfigFlow
 from homeassistant.const import CONF_ADDRESS
 
 from .const import DOMAIN
+
+if TYPE_CHECKING:
+    from bleak.backends.device import BLEDevice
 
 
 @dataclass
@@ -45,10 +48,13 @@ class GoveeConfigFlow(ConfigFlow, domain=DOMAIN):
         self._discovered_devices = {}
 
     async def _get_device_info(self, device: BLEDevice) -> DeviceData:
-        async with BleakClient(device) as client:
+        client = await establish_connection(BleakClient, device, device.name or device.address)
+        try:
             async with connected(client) as govee:
                 mac = await govee.send_command(GetMacAddress())
                 firmware = await govee.send_command(GetFirmwareVersion())
+        finally:
+            await client.disconnect()
 
         return DeviceData(mac, firmware)
 
@@ -57,30 +63,26 @@ class GoveeConfigFlow(ConfigFlow, domain=DOMAIN):
         self._abort_if_unique_id_configured()
 
         name = discovery_info.name
-        self.context["title_placeholders"] = {"name": name}
+        self.context['title_placeholders'] = {'name': name}
 
         device_data = await self._get_device_info(discovery_info.device)
         self._discovered_device = Discovery(name, discovery_info, device_data)
 
-        self._log.debug("Discovered device: %s", self._discovered_device)
+        self._log.debug('Discovered device: %s', self._discovered_device)
         return await self.async_step_bluetooth_confirm()
 
-    async def async_step_bluetooth_confirm(
-        self, user_input: dict[str, Any] | None = None
-    ):
+    async def async_step_bluetooth_confirm(self, user_input: dict[str, Any] | None = None):
         """Confirm discovery."""
         if user_input is not None:
-            self._log.debug("User confirmed device: %s", user_input)
-            return self.async_create_entry(
-                title=self.context["title_placeholders"]["name"], data={}
-            )
+            self._log.debug('User confirmed device: %s', user_input)
+            return self.async_create_entry(title=self.context['title_placeholders']['name'], data={})
 
-        self._log.debug("Context: %s", self.context)
+        self._log.debug('Context: %s', self.context)
 
         self._set_confirm_only()
         return self.async_show_form(
-            step_id="bluetooth_confirm",
-            description_placeholders=self.context["title_placeholders"],
+            step_id='bluetooth_confirm',
+            description_placeholders=self.context['title_placeholders'],
         )
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None):
@@ -92,7 +94,7 @@ class GoveeConfigFlow(ConfigFlow, domain=DOMAIN):
 
             discovery = self._discovered_devices[address]
             self._discovered_device = discovery
-            self.context["title_placeholders"] = {"name": discovery.name}
+            self.context['title_placeholders'] = {'name': discovery.name}
 
             return self.async_create_entry(title=discovery.name, data={})
 
@@ -105,17 +107,14 @@ class GoveeConfigFlow(ConfigFlow, domain=DOMAIN):
             name = discovery_info.name
             data = await self._get_device_info(discovery_info.device)
             self._discovered_devices[address] = Discovery(name, discovery_info, data)
-            self._log.debug("Discovered device: %s", self._discovered_device)
+            self._log.debug('Discovered device: %s', self._discovered_device)
 
         if not self._discovered_devices:
-            return self.async_abort(reason="no_devices_found")
+            return self.async_abort(reason='no_devices_found')
 
-        titles = {
-            address: discovery.name
-            for (address, discovery) in self._discovered_devices.items()
-        }
+        titles = {address: discovery.name for (address, discovery) in self._discovered_devices.items()}
 
         return self.async_show_form(
-            step_id="user",
+            step_id='user',
             data_schema=vol.Schema({vol.Required(CONF_ADDRESS): vol.In(titles)}),
         )
