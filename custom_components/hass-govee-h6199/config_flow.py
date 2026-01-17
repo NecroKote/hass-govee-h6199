@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 import voluptuous as vol
 from bleak import BleakClient
+from bleak.exc import BleakError
 from bleak_retry_connector import establish_connection
 from govee_h6199_ble import GetFirmwareVersion, GetMacAddress, connected
 from homeassistant.components.bluetooth import (
@@ -14,8 +15,9 @@ from homeassistant.components.bluetooth import (
 )
 from homeassistant.config_entries import ConfigFlow
 from homeassistant.const import CONF_ADDRESS
+from homeassistant.data_entry_flow import AbortFlow
 
-from .const import DOMAIN
+from .const import DEVICE_NAME_PREFIX, DOMAIN
 
 if TYPE_CHECKING:
     from bleak.backends.device import BLEDevice
@@ -94,27 +96,40 @@ class GoveeConfigFlow(ConfigFlow, domain=DOMAIN):
 
             discovery = self._discovered_devices[address]
             self._discovered_device = discovery
-            self.context['title_placeholders'] = {'name': discovery.name}
+            self.context["title_placeholders"] = {"name": discovery.name}
 
             return self.async_create_entry(title=discovery.name, data={})
 
         current_addresses = self._async_current_ids()
-        for discovery_info in async_discovered_service_info(self.hass):
+        discovered = list(async_discovered_service_info(self.hass))
+        for discovery_info in discovered:
             address = discovery_info.address
             if address in current_addresses or address in self._discovered_devices:
                 continue
 
             name = discovery_info.name
-            data = await self._get_device_info(discovery_info.device)
-            self._discovered_devices[address] = Discovery(name, discovery_info, data)
-            self._log.debug('Discovered device: %s', self._discovered_device)
+            if name and not name.startswith(DEVICE_NAME_PREFIX):
+                continue
+
+            try:
+                data = await self._get_device_info(discovery_info.device)
+                self._discovered_devices[address] = Discovery(
+                    name, discovery_info, data
+                )
+            except BleakError as e:
+                self._log.warning(
+                    "Failed to connect to device %s (%s): %s", name, address, e
+                )
 
         if not self._discovered_devices:
-            return self.async_abort(reason='no_devices_found')
+            raise AbortFlow("no_devices_found")
 
-        titles = {address: discovery.name for (address, discovery) in self._discovered_devices.items()}
+        titles = {
+            address: discovery.name
+            for (address, discovery) in self._discovered_devices.items()
+        }
 
         return self.async_show_form(
-            step_id='user',
+            step_id="user",
             data_schema=vol.Schema({vol.Required(CONF_ADDRESS): vol.In(titles)}),
         )
