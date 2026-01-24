@@ -1,17 +1,22 @@
+import logging
+
 from bleak_retry_connector import close_stale_connections_by_address
 from homeassistant.components import bluetooth
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 
-from .coordinator import CustomConfigEntry, GoveeH6199DataCoordinator
-from .device import GoveeH6199Device
+from .coordinator import Coordinator, CustomConfigEntry
 
 PLATFORMS = [Platform.LIGHT]
+
+log = logging.getLogger(__name__)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: CustomConfigEntry) -> bool:
     """Set up Govee BLE device from a config entry."""
+
+    log.debug("Setting up config entry: %s", entry.entry_id)
 
     address = entry.unique_id
     assert address is not None
@@ -19,19 +24,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: CustomConfigEntry) -> bo
 
     ble_device = bluetooth.async_ble_device_from_address(hass, address)
     if not ble_device:
-        raise ConfigEntryNotReady(f'Could not find Govee H6199 device with address {address}')
+        raise ConfigEntryNotReady(
+            f"Could not find Govee H6199 device with address {address}"
+        )
 
-    device = GoveeH6199Device(address, ble_device)
-    coordinator = GoveeH6199DataCoordinator(hass, entry, device)
-    device.on_data_listeners.append(coordinator.async_set_updated_data)
-
+    coordinator = Coordinator(hass, entry, ble_device)
     entry.runtime_data = coordinator
+
+    # won't do much in terms of data, but will start the connection process
     await coordinator.async_config_entry_first_refresh()
 
+    log.debug("Forwarding setup to platforms for entry: %s", entry.entry_id)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    log.debug("Setup complete for config entry: %s", entry.entry_id)
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: CustomConfigEntry) -> bool:
     """Unload a config entry."""
+    log.debug("Unloading config entry: %s", entry.entry_id)
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)

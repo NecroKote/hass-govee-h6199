@@ -1,9 +1,17 @@
 import logging
 import math
 from functools import cached_property
-from typing import ClassVar
 
 from govee_h6199_ble import MusicColorMode, VideoColorMode
+from govee_h6199_ble.commands import (
+    Command,
+    PowerOff,
+    PowerOn,
+    SetBrightness,
+    SetMusicModeEnergic,
+    SetStaticColor,
+    SetVideoMode,
+)
 from homeassistant.components.light import (
     ATTR_BRIGHTNESS,
     ATTR_EFFECT,
@@ -13,15 +21,14 @@ from homeassistant.components.light import (
     LightEntity,
     LightEntityFeature,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util.color import brightness_to_value, value_to_brightness
 
 from .const import BRIGHTNESS_SCALE, Effect
-from .coordinator import CustomConfigEntry, GoveeH6199DataCoordinator
-from .device import PowerOnCommandBuilder
+from .coordinator import Coordinator, CustomConfigEntry
 
 
 async def async_setup_entry(
@@ -32,17 +39,7 @@ async def async_setup_entry(
     async_add_entities([GoveeH1699(entry)])
 
 
-class GoveeH1699(CoordinatorEntity[GoveeH6199DataCoordinator], LightEntity):
-    _attr_color_mode = ColorMode.RGB
-    _attr_supported_color_modes: ClassVar[set[ColorMode]] = {ColorMode.RGB}
-    _attr_supported_features = LightEntityFeature.EFFECT
-    _attr_effect_list: ClassVar[list[Effect | str]] = [
-        EFFECT_OFF,
-        Effect.MUSIC,
-        Effect.FILM,
-        Effect.GAME,
-    ]
-
+class GoveeH1699(CoordinatorEntity[Coordinator], LightEntity):
     def __init__(
         self,
         entry: CustomConfigEntry,
@@ -61,45 +58,85 @@ class GoveeH1699(CoordinatorEntity[GoveeH6199DataCoordinator], LightEntity):
             manufacturer='Govee',
             model_id='H1699',
             model='Govee DreamView T1',
-            sw_version=self._data.fw_version,
-            hw_version=self._data.hw_version,
         )
 
     @property
     def _data(self):
         return self.coordinator.data
 
+    @property
+    def _state(self):
+        if data := self._data:
+            return data.state
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+
+        # since device info is awailable only after updated after initial setup, update it here
+        if (device_info := self._data.device_info) and self._attr_device_info:
+            self._attr_device_info['sw_version'] = device_info.fw_version
+            self._attr_device_info['hw_version'] = device_info.hw_version
+
+        self.async_write_ha_state()
+
     @cached_property
     def name(self) -> str:
         """Return the name of the light."""
         return 'Light'
 
-    @property
-    def brightness(self) -> int | None:
-        return value_to_brightness(BRIGHTNESS_SCALE, self._data.brightness)
+    @cached_property
+    def color_mode(self):
+        return ColorMode.RGB
+
+    @cached_property
+    def supported_color_modes(self):
+        return {ColorMode.RGB}
+
+    @cached_property
+    def supported_features(self):
+        return LightEntityFeature.EFFECT
+
+    @cached_property
+    def effect_list(self):
+        return [
+        EFFECT_OFF,
+        Effect.MUSIC,
+        Effect.FILM,
+        Effect.GAME,
+    ]
+
 
     @property
-    def is_on(self) -> bool | None:
-        return self._data.power_state
+    def brightness(self):
+        if state := self._state:
+            return value_to_brightness(BRIGHTNESS_SCALE, state.brightness)
+
+    @property
+    def is_on(self):
+        if state := self._state:
+            return state.power_state
 
     @property
     def rgb_color(self) -> tuple[int, int, int] | None:
-        return self._data.color
+        if state := self._state:
+            return state.color
 
     @property
     def effect(self) -> str | None:
-        match self._data.mode:
-            case MusicColorMode():
-                return Effect.MUSIC
-            case VideoColorMode(game_mode=game_mode):
-                if game_mode:
-                    return Effect.GAME
-                return Effect.FILM
+        if (state := self._state) and state.mode:
+            match state.mode:
+                case MusicColorMode():
+                    return Effect.MUSIC
+                case VideoColorMode(game_mode=game_mode):
+                    if game_mode:
+                        return Effect.GAME
+                    return Effect.FILM
 
         return EFFECT_OFF
 
     async def async_turn_on(self, **kwargs) -> None:
-        on_command = PowerOnCommandBuilder(self._data)
+        on_command = PowerOnCommandBuilder()
 
         if raw_brightness := kwargs.get(ATTR_BRIGHTNESS):
             brightness = math.ceil(brightness_to_value(BRIGHTNESS_SCALE, raw_brightness))
@@ -111,9 +148,41 @@ class GoveeH1699(CoordinatorEntity[GoveeH6199DataCoordinator], LightEntity):
         if rgb := kwargs.get(ATTR_RGB_COLOR):
             on_command.with_color(rgb)
 
-        await self.coordinator.device.power_on(on_command)
-        await self.async_update()
+        await self.coordinator.send_commands(on_command.build())
 
     async def async_turn_off(self, **kwargs) -> None:
-        await self.coordinator.device.power_off()
-        await self.async_update()
+        await self.coordinator.send_commands([PowerOff()])
+
+
+class PowerOnCommandBuilder:
+    def __init__(self):
+        self._commands: list[Command] = [PowerOn()]
+
+    def with_brightness(self, brightness: int):
+        self._commands.append(SetBrightness(brightness))
+        return self
+
+    def with_effect(self, effect: Effect):
+        match effect:
+            case Effect.MUSIC:
+                # TODO: read props on effects from attributes
+                self._commands.append(SetMusicModeEnergic())
+            case Effect.FILM:
+                # TODO: read props on effects from attributes
+                self._commands.append(SetVideoMode())
+            case Effect.GAME:
+                self._commands.append(SetVideoMode(game_mode=True))
+            case _:
+                # OFF means switch back to static color mode
+                if (color := (self._state and self._state.color)) is None:
+                    color = (248, 51, 255)
+
+                self.with_color(color)
+        return self
+
+    def with_color(self, color: tuple[int, int, int]):
+        self._commands.append(SetStaticColor(color))
+        return self
+
+    def build(self):
+        return self._commands
