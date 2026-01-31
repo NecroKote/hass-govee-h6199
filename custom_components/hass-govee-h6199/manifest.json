@@ -10,5 +10,5 @@
     "issue_tracker": "https://github.com/necrokote/hass-govee-h6199/issues",
     "loggers": ["custom_components.hass-govee-h6199", "govee_h6199_ble"],
     "requirements": ["bleak-retry-connector", "govee-h6199-ble==1.0.0"],
-    "version": "0.5.0b1"
+    "version": "0.5.0b2"
 }
