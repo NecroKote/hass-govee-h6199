@@ -8,7 +8,7 @@ from async_timeout import timeout
 from bleak import BleakClient
 from bleak.backends.device import BLEDevice
 from bleak.exc import BleakError
-from bleak_retry_connector import BleakConnectionError, establish_connection
+from bleak_retry_connector import close_stale_connections, establish_connection
 from govee_h6199_ble import Command, GoveeH6199
 from govee_h6199_ble.commands import (
     GetBrightness,
@@ -27,7 +27,7 @@ from homeassistant.helpers.update_coordinator import (
 )
 from homeassistant.util.dt import utcnow
 
-from .const import DOMAIN, UPDATE_INTERVAL_SEC, UPDATE_TIMEOUT_SEC
+from .const import DOMAIN, RECONNECT_DELAY_SEC, UPDATE_INTERVAL_SEC, UPDATE_TIMEOUT_SEC
 from .data import DeviceInfo, GoveeH6199Data, State
 
 type CustomConfigEntry = ConfigEntry['Coordinator']
@@ -53,7 +53,7 @@ class Coordinator(TimestampDataUpdateCoordinator[GoveeH6199Data]):
         self._condition = asyncio.Condition()
         self._connected_device: GoveeH6199 | None = None
         self._disconnect_task: asyncio.Task | None = None
-        self._reconnect_task: asyncio.Task | None = None
+        self._connect_task: asyncio.Task | None = None
         self._is_first_data_update = True
         self.data = GoveeH6199Data(self._device.address)
 
@@ -61,19 +61,15 @@ class Coordinator(TimestampDataUpdateCoordinator[GoveeH6199Data]):
         task_id = id(asyncio.current_task())
         self.logger.debug('[%d] connecting to %s ...', task_id, self._device.address)
 
-        try:
-            client = await establish_connection(
-                BleakClient,
-                self._device,
-                self._device.address,
-                disconnected_callback=lambda cl: self._handle_disconnect(cl, task_id),
-                # micro optimisation: only request the service we need
-                # in theory should speed up connection time
-                services=set([UUID_SERVICE])
-            )
-        except BleakConnectionError:
-            self.logger.debug('[%d] connection failed (connection error)', task_id)
-            return
+        client = await establish_connection(
+            BleakClient,
+            self._device,
+            self._device.address,
+            disconnected_callback=lambda cl: self._handle_disconnect(cl, task_id),
+            # micro optimisation: only request the service we need
+            # in theory should speed up connection time
+            services=set([UUID_SERVICE])
+        )
 
         device = GoveeH6199(client)
 
@@ -93,42 +89,57 @@ class Coordinator(TimestampDataUpdateCoordinator[GoveeH6199Data]):
                 self.data.device_info = DeviceInfo(mac=mac, fw_version=fw_version, hw_version=hw_version)
                 self._condition.notify_all()
 
-            refresh_task = self.config_entry.async_create_background_task(self.hass, self.async_request_refresh(), 'refresh_after_connect', eager_start=False)
-            refresh_task.add_done_callback(lambda t: self.logger.debug('[%d] refresh_after_connect done', id(t)))
+    def _handle_disconnect(self, _: BleakClient | None, connect_task_id: int):
+        if not self._disconnect_task or self._disconnect_task.done():
+            def cleanup(task: asyncio.Task):
+                self.logger.debug('[%d] on_disconnect done', id(task), exc_info=task.exception())
+                self._disconnect_task = None
 
-    def _handle_disconnect(self, client: BleakClient, connect_task_id: int):
-        """called every time a 'retry' is disconnected"""
+            task = self.config_entry.async_create_background_task(self.hass, self._on_disconnect(connect_task_id), 'on_disconnect')
+            task.add_done_callback(cleanup)
+            self._disconnect_task = task
 
-        if client.is_connected:
-            self.logger.debug('[%d] fake disconnect. (still connected)', connect_task_id)
+    async def _schedule_connect(self, after_delay: float  | None = None):
+        task_id = id(asyncio.current_task())
+
+        if after_delay is not None:
+            await asyncio.sleep(after_delay)
+
+        # Schedule connection (ensure we only have one connect task)
+        if self._connect_task and not self._connect_task.done():
+            self.logger.debug('[%d] connect already scheduled: %d', task_id, id(self._connect_task))
             return
 
-        if not self._disconnect_task or self._disconnect_task.done():
-            disconnect_task = self.config_entry.async_create_background_task(self.hass, self._on_disconnect(connect_task_id), 'on_disconnect')
-            disconnect_task.add_done_callback(lambda t: self.logger.debug('[%d] on_disconnect done', id(t)))
-            self._disconnect_task = disconnect_task
+        def cleanup(task: asyncio.Task):
+            task_id = id(task)
+            self.logger.debug('[%d] connect done', task_id, exc_info=task.exception())
+            self._connect_task = None
+
+            # schedule reconnect on failure
+            if task.exception() is not None:
+                self.logger.info('[%d] scheduling reconnect after failure', task_id)
+                self.config_entry.async_create_background_task(self.hass, self._schedule_connect(after_delay=RECONNECT_DELAY_SEC), 'reconnect', eager_start=False)
+
+        task = self.config_entry.async_create_background_task(self.hass, self._connect(), 'connect', eager_start=False)
+        task.add_done_callback(cleanup)
+
+        self.logger.debug('[%d] connect task scheduled: %d', task_id, id(task))
+        self._connect_task = task
 
     async def _on_disconnect(self, connect_task_id: int):
         task_id = id(asyncio.current_task())
         self.logger.info('[%d] disconnected %d', task_id, connect_task_id)
 
+        try:
+            await close_stale_connections(self._device)
+        except Exception:
+            pass
+
         async with self._condition:
             self._connected_device = None
             self._condition.notify_all()
 
-        # Schedule reconnection (ensure we only have one reconnect task)
-        if not self._reconnect_task or self._reconnect_task.done():
-            def _cleanup_reconnect_task(task_id: int):
-                self._reconnect_task = None
-                self.logger.debug('[%d] reconnect done', task_id)
-
-            reconnect_task = self.config_entry.async_create_task(self.hass, self._connect(), 'reconnect', eager_start=False)
-            reconnect_task.add_done_callback(lambda t: _cleanup_reconnect_task(id(t)))
-
-            self.logger.debug('[%d] reconnect task scheduled: %d', task_id, id(reconnect_task))
-            self._reconnect_task = reconnect_task
-
-        self._disconnect_task = None
+        await self._schedule_connect(after_delay=RECONNECT_DELAY_SEC)
 
     async def _ping(self):
         PING_INTERVAL_SEC = 2
@@ -151,7 +162,7 @@ class Coordinator(TimestampDataUpdateCoordinator[GoveeH6199Data]):
             yield
         except (BleakError) as err:
             if str(err) != 'disconnected':
-                self.logger.debug('Unexpected error: %s', err)
+                self.logger.debug('Non-disconnected error', exc_info=err)
                 raise err
 
     @asynccontextmanager
@@ -174,8 +185,7 @@ class Coordinator(TimestampDataUpdateCoordinator[GoveeH6199Data]):
         - schedule "ping" task
         """
 
-        connect_task = self.config_entry.async_create_background_task(self.hass, self._connect(), 'connect', eager_start=False)
-        connect_task.add_done_callback(lambda t: self.logger.debug('[%d] connect done', id(t)))
+        self.config_entry.async_create_background_task(self.hass, self._schedule_connect(), 'initial_connect', eager_start=False)
         self.config_entry.async_create_background_task(self.hass, self._ping(), 'ping', eager_start=False)
 
     async def _async_update_data(self):
