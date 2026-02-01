@@ -92,7 +92,14 @@ class Coordinator(TimestampDataUpdateCoordinator[GoveeH6199Data]):
     def _handle_disconnect(self, _: BleakClient | None, connect_task_id: int):
         if not self._disconnect_task or self._disconnect_task.done():
             def cleanup(task: asyncio.Task):
-                self.logger.debug('[%d] on_disconnect done', id(task), exc_info=task.exception())
+                task_id = id(task)
+                try:
+                    exception = task.exception()
+                    self.logger.debug('[%d] on_disconnect done', task_id, exc_info=exception)
+                except asyncio.CancelledError:
+                    self.logger.debug('[%d] on_disconnect cancelled', task_id)
+                    pass
+
                 self._disconnect_task = None
 
             task = self.config_entry.async_create_background_task(self.hass, self._on_disconnect(connect_task_id), 'on_disconnect')
@@ -112,7 +119,13 @@ class Coordinator(TimestampDataUpdateCoordinator[GoveeH6199Data]):
 
         def cleanup(task: asyncio.Task):
             task_id = id(task)
-            self.logger.debug('[%d] connect done', task_id, exc_info=task.exception())
+            try:
+                exception = task.exception()
+                self.logger.debug('[%d] connect done', task_id, exc_info=exception)
+            except asyncio.CancelledError:
+                self.logger.debug('[%d] connect cancelled', task_id)
+                pass
+
             self._connect_task = None
 
             # schedule reconnect on failure
